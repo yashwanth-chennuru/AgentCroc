@@ -10,7 +10,7 @@ async function main() {
 
   const server = new McpServer({
     name: "agentcroc",
-    version: "0.1.4",
+    version: "0.2.0",
   });
 
   registerTools(server, config);

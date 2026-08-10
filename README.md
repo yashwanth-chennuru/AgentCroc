@@ -31,27 +31,58 @@ From [console.agentmail.to](https://console.agentmail.to): API key + inbox (e.g.
 }
 ```
 
-That’s it. Restart MCP / Cursor, then try:
+That’s it. Restart MCP / Cursor.
 
-- `send ./notes.pdf to friend@agentmail.to`
-- `receive files from friend@agentmail.to`
-
-Downloads default to `~/Downloads/agentcroc` (override with `AGENTCROC_DOWNLOAD_DIR` if you want).
-
-Each agent that sends/receives needs its own MCP entry with **its** API key + inbox.
+Downloads default to `~/Downloads/agentcroc`.
 
 ---
 
-## What it does
+## Pair once (recommended)
+
+Pairing seals redeem secrets (`code` / `store_token`) inside the AgentMail offer so the mail provider cannot redeem your transfer.
+
+**On agent A (e.g. k396):**
+
+> pair_create with peer_email yashjee22@agentmail.to
+
+Copy the returned `shared_secret` out-of-band (chat), not through AgentMail if possible.
+
+**On agent B (yashjee22):**
+
+> pair_accept with peer_email k396@agentmail.to and shared_secret `<secret>`
+
+Then normal send/receive. `send_file` will report `sealed: true`.
+
+Optional: set `AGENTCROC_REQUIRE_PAIR=true` to refuse unsealed sends.
+
+---
+
+## Everyday use
+
+- `send ./notes.pdf to friend@agentmail.to`
+- `list offers from friend@agentmail.to`
+- `receive files from friend@agentmail.to`
 
 | Tool | Purpose |
 |---|---|
-| `send_file` | Upload via croc → email a tiny offer to the other agent |
-| `list_offers` | See pending offers in your inbox |
-| `receive_file` | Fetch + decrypt the file |
-| `whoami` | Show your configured identity |
+| `whoami` | Identity + paired peers |
+| `pair_create` / `pair_accept` / `pair_list` / `pair_remove` | One-time pairing |
+| `send_file` | Upload via croc → email offer (sealed if paired) |
+| `list_offers` | Pending pickup slips |
+| `receive_file` | Unseal (if needed) → fetch via croc |
 
-Files are **not** email attachments. AgentMail only carries a small pickup slip; croc moves the encrypted bytes (public getcroc.com store by default — no server of yours required).
+Files are **not** email attachments. AgentMail only carries the pickup slip.
+
+## Modes
+
+- **`store` (default)** — async via getcroc.com (public store has create rate limits)
+- **`live`** — both online; sender returns `waiting_for_receiver`, recipient should receive soon
+
+## Security (short)
+
+- File bytes: E2E via croc (relay/store see ciphertext)
+- Unpaired offers: redeem token is readable in AgentMail
+- Paired offers: redeem token is AES-GCM sealed with the shared pair secret (stored under `~/.config/agentcroc/pairs.json`)
 
 ## Local clone (optional)
 
@@ -60,29 +91,7 @@ git clone https://github.com/yashwanth-chennuru/AgentCroc.git
 cd AgentCroc && npm install
 ```
 
-```json
-{
-  "mcpServers": {
-    "agentcroc": {
-      "command": "node",
-      "args": ["/absolute/path/to/AgentCroc/bin/agentcroc.js"],
-      "env": {
-        "AGENTMAIL_API_KEY": "am_...",
-        "AGENTCROC_INBOX_ID": "you@agentmail.to"
-      }
-    }
-  }
-}
-```
-
-## Modes
-
-- **`store` (default)** — async; recipient can download later
-- **`live`** — both agents online at once on the public relay
-
-## Security (short)
-
-Offer emails contain redeem tokens. Anyone who can read that inbox can claim a pending transfer. File contents stay E2E via croc.
+Point MCP `command` at `node /absolute/path/to/AgentCroc/bin/agentcroc.js`.
 
 ## License
 

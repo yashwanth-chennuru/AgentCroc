@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { resolvePairsPath } from "./pairs.js";
 
 export type TransferMode = "store" | "live";
 
@@ -14,6 +15,9 @@ export interface Config {
   crocStoreUrl: string;
   defaultMode: TransferMode;
   liveTimeoutMs: number;
+  pairsFile: string;
+  /** If true, refuse send_file unless a pair exists for the recipient. */
+  requirePair: boolean;
 }
 
 function required(name: string): string {
@@ -37,6 +41,9 @@ export function loadConfig(): Config {
   }
 
   const crocBin = process.env.CROC_BIN?.trim() || "croc";
+  const requirePair = ["1", "true", "yes", "on"].includes(
+    (process.env.AGENTCROC_REQUIRE_PAIR || "").trim().toLowerCase(),
+  );
 
   return {
     agentmailApiKey: required("AGENTMAIL_API_KEY"),
@@ -48,6 +55,8 @@ export function loadConfig(): Config {
     crocStoreUrl: process.env.CROC_STORE_URL?.trim() || "https://getcroc.com",
     defaultMode: mode,
     liveTimeoutMs: Number(process.env.AGENTCROC_LIVE_TIMEOUT_MS || 30 * 60 * 1000),
+    pairsFile: resolvePairsPath(process.env.AGENTCROC_PAIRS_FILE?.trim()),
+    requirePair,
   };
 }
 
