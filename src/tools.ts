@@ -19,7 +19,14 @@ import {
   waitForLiveSenderReady,
 } from "./croc.js";
 import type { FileOffer } from "./offer.js";
-import { OFFER_PROTOCOL } from "./offer.js";
+import { OFFER_PROTOCOL, openOfferSecrets, sealOfferForMailbox } from "./offer.js";
+import {
+  generatePairSecret,
+  getPairSecret,
+  listPairs,
+  removePair,
+  upsertPair,
+} from "./pairs.js";
 
 function textResult(data: unknown, isError = false) {
   return {
@@ -39,6 +46,23 @@ function defaultExpiry(mode: "store" | "live", storeExpiresAt?: string): string 
   return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 }
 
+function prepareOfferForMail(
+  config: Config,
+  offer: FileOffer,
+  peerEmail: string,
+): { mailboxOffer: FileOffer; sealed: boolean } {
+  const secret = getPairSecret(config.pairsFile, peerEmail);
+  if (!secret) {
+    if (config.requirePair) {
+      throw new Error(
+        `No pair with ${peerEmail}. Run pair_create on one agent and pair_accept on the other first.`,
+      );
+    }
+    return { mailboxOffer: offer, sealed: false };
+  }
+  return { mailboxOffer: sealOfferForMailbox(offer, secret), sealed: true };
+}
+
 export function registerTools(server: McpServer, config: Config = loadConfig()): void {
   const mail = createMailClient(config);
 
@@ -56,7 +80,116 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
         download_dir: config.downloadDir,
         store_url: config.crocStoreUrl,
         relay: config.crocRelay ?? "(croc public default)",
+        pairs_file: config.pairsFile,
+        require_pair: config.requirePair,
+        paired_peers: listPairs(config.pairsFile).map((p) => p.peer),
       }),
+  );
+
+  server.registerTool(
+    "pair_create",
+    {
+      title: "Create pair with peer agent",
+      description:
+        "One-time pairing: generate a shared secret for a peer agent email, store it locally, and return the secret once so the peer can run pair_accept. After both sides store it, send_file seals redeem tokens so AgentMail cannot read them.",
+      inputSchema: {
+        peer_email: z
+          .string()
+          .email()
+          .describe("Peer agent email, e.g. yashjee22@agentmail.to"),
+      },
+    },
+    async ({ peer_email }) => {
+      try {
+        const secret = generatePairSecret();
+        upsertPair(config.pairsFile, peer_email, secret);
+        return textResult({
+          status: "pair_created",
+          peer_email,
+          shared_secret: secret,
+          pairs_file: config.pairsFile,
+          next_step: `On the peer agent, run pair_accept with peer_email=${config.inboxId} and this shared_secret. Share the secret out-of-band (chat), not via AgentMail if you can avoid it.`,
+        });
+      } catch (err) {
+        return textResult(
+          { error: err instanceof Error ? err.message : String(err) },
+          true,
+        );
+      }
+    },
+  );
+
+  server.registerTool(
+    "pair_accept",
+    {
+      title: "Accept pair shared secret",
+      description:
+        "Store a shared secret created by the peer agent's pair_create. Do this once per relationship.",
+      inputSchema: {
+        peer_email: z
+          .string()
+          .email()
+          .describe("The other agent's email (who ran pair_create)"),
+        shared_secret: z
+          .string()
+          .min(16)
+          .describe("Shared secret returned by peer's pair_create"),
+      },
+    },
+    async ({ peer_email, shared_secret }) => {
+      try {
+        upsertPair(config.pairsFile, peer_email, shared_secret);
+        return textResult({
+          status: "pair_accepted",
+          peer_email,
+          pairs_file: config.pairsFile,
+          note: "Pairing complete. Future send_file offers to/from this peer will seal redeem tokens.",
+        });
+      } catch (err) {
+        return textResult(
+          { error: err instanceof Error ? err.message : String(err) },
+          true,
+        );
+      }
+    },
+  );
+
+  server.registerTool(
+    "pair_list",
+    {
+      title: "List paired agents",
+      description: "List peer agent emails this runtime has a shared pairing secret for.",
+    },
+    async () =>
+      textResult({
+        pairs_file: config.pairsFile,
+        pairs: listPairs(config.pairsFile),
+      }),
+  );
+
+  server.registerTool(
+    "pair_remove",
+    {
+      title: "Remove pair",
+      description: "Delete the local shared secret for a peer agent.",
+      inputSchema: {
+        peer_email: z.string().email().describe("Peer agent email to unpair"),
+      },
+    },
+    async ({ peer_email }) => {
+      try {
+        const removed = removePair(config.pairsFile, peer_email);
+        return textResult({
+          status: removed ? "removed" : "not_found",
+          peer_email,
+        });
+      } catch (err) {
+        return textResult(
+          { error: err instanceof Error ? err.message : String(err) },
+          true,
+        );
+      }
+    },
   );
 
   server.registerTool(
@@ -64,7 +197,7 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
     {
       title: "Send file to agent",
       description:
-        "Send a file to another agent identified by AgentMail address. Uploads ciphertext via croc (default: async store on getcroc.com), then emails a tiny AgentCroc offer (pickup slip) to the recipient. The file itself is NOT sent over email.",
+        "Send a file to another agent identified by AgentMail address. Uploads ciphertext via croc (default: async store on getcroc.com), then emails a tiny AgentCroc offer (pickup slip) to the recipient. If a pair exists, redeem tokens are sealed so AgentMail cannot read them. The file itself is NOT sent over email.",
       inputSchema: {
         to: z
           .string()
@@ -105,7 +238,8 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
             created_at: new Date().toISOString(),
             expires_at: defaultExpiry("store", stored.expiresAt),
           };
-          const mailResult = await sendOfferEmail(config, mail, offer);
+          const { mailboxOffer, sealed } = prepareOfferForMail(config, offer, to);
+          const mailResult = await sendOfferEmail(config, mail, mailboxOffer);
           return textResult({
             status: "offer_sent",
             mode: "store",
@@ -115,12 +249,13 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
             size_bytes: size,
             expires_at: offer.expires_at,
             offer_message_id: mailResult.messageId,
-            note: "Recipient can call receive_file / list_offers. File bytes stay off AgentMail.",
+            sealed,
+            note: sealed
+              ? "Offer sealed with pair secret. Recipient must be paired to receive."
+              : "No pair with recipient — redeem token sent in plaintext offer. Run pair_create/pair_accept to seal future offers.",
           });
         }
 
-        // live mode: start waiting on the relay, email the offer, return immediately.
-        // (Awaiting completion here makes Cursor/opencode MCP calls time out.)
         const code = generateLiveCode();
         const offer: FileOffer = {
           protocol: OFFER_PROTOCOL,
@@ -137,8 +272,8 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
         };
         const live = crocLiveSend(config, resolved, code);
         await waitForLiveSenderReady();
-        const mailResult = await sendOfferEmail(config, mail, offer);
-        // Intentionally do not await live.done — receiver should call receive_file next.
+        const { mailboxOffer, sealed } = prepareOfferForMail(config, offer, to);
+        const mailResult = await sendOfferEmail(config, mail, mailboxOffer);
         void live;
         return textResult({
           status: "waiting_for_receiver",
@@ -149,7 +284,10 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
           size_bytes: size,
           expires_at: offer.expires_at,
           offer_message_id: mailResult.messageId,
-          note: "Sender is waiting on the croc relay. On the recipient agent, call receive_file soon (before live expiry).",
+          sealed,
+          note: sealed
+            ? "Sealed live offer sent. Recipient must be paired and call receive_file soon."
+            : "Sender is waiting on the croc relay. Recipient should call receive_file soon. Tip: pair agents to seal live codes.",
         });
       } catch (err) {
         return textResult(
@@ -197,6 +335,7 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
             filename: o.offer.filename,
             size_bytes: o.offer.size_bytes,
             mode: o.offer.mode,
+            sealed: Boolean(o.offer.sealed),
             expires_at: o.offer.expires_at,
             message_id: o.messageId,
             already_received: o.alreadyReceived,
@@ -216,7 +355,7 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
     {
       title: "Receive file from agent",
       description:
-        "Receive a file offered by another agent. Looks up the AgentCroc offer in AgentMail, then fetches & decrypts bytes via croc (store token or live code). Does not download email attachments.",
+        "Receive a file offered by another agent. Looks up the AgentCroc offer in AgentMail, unseals redeem secrets if paired, then fetches & decrypts bytes via croc. Does not download email attachments.",
       inputSchema: {
         from: z
           .string()
@@ -266,6 +405,7 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
                 from: o.offer.from,
                 filename: o.offer.filename,
                 mode: o.offer.mode,
+                sealed: Boolean(o.offer.sealed),
                 expires_at: o.offer.expires_at,
               })),
             },
@@ -275,16 +415,17 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
 
         const chosen = selected[0]!;
         const dest = path.resolve(out_dir || config.downloadDir);
-        const offer = chosen.offer;
+        const pairSecret = getPairSecret(config.pairsFile, chosen.offer.from);
+        const offer = openOfferSecrets(chosen.offer, pairSecret);
 
         if (offer.mode === "store") {
           if (!offer.store_token) {
-            throw new Error("Offer is missing store_token");
+            throw new Error("Offer is missing store_token (unseal may have failed)");
           }
           await crocReceiveStore(config, offer.store_token, dest);
         } else {
           if (!offer.code) {
-            throw new Error("Offer is missing live code");
+            throw new Error("Offer is missing live code (unseal may have failed)");
           }
           await crocReceiveLive(config, offer.code, dest);
         }
@@ -297,6 +438,7 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
           from: offer.from,
           filename: offer.filename,
           mode: offer.mode,
+          sealed: Boolean(chosen.offer.sealed),
           out_dir: dest,
           saved_as: path.join(dest, offer.filename),
         });

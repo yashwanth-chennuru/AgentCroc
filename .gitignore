@@ -7,3 +7,5 @@ downloads/
 *.log
 .DS_Store
 .receipts/
+pairs.json
+
