@@ -4,7 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { assertPathExists, loadConfig, type Config } from "./config.js";
 import {
   createMailClient,
-  listOffers,
+  listOffersDetailed,
   markOfferReceived,
   sendOfferEmail,
 } from "./agentmail.js";
@@ -322,7 +322,7 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
     },
     async ({ from, include_received, include_expired }) => {
       try {
-        const offers = await listOffers(config, mail, {
+        const { offers, skipped } = await listOffersDetailed(config, mail, {
           from,
           includeReceived: include_received,
           includeExpired: include_expired,
@@ -340,6 +340,7 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
             message_id: o.messageId,
             already_received: o.alreadyReceived,
           })),
+          skipped: skipped.slice(0, 20),
         });
       } catch (err) {
         return textResult(
@@ -374,7 +375,7 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
     },
     async ({ from, transfer_id, out_dir }) => {
       try {
-        const offers = await listOffers(config, mail, {
+        const { offers, skipped } = await listOffersDetailed(config, mail, {
           from,
           includeReceived: false,
           includeExpired: false,
@@ -392,6 +393,7 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
               hint: "Ask the sender to send_file, or call list_offers. For live mode, sender must still be waiting.",
               from,
               transfer_id,
+              skipped: skipped.slice(0, 20),
             },
             true,
           );

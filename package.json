@@ -1,6 +1,6 @@
 {
   "name": "agentcroc",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Agent-to-agent E2E file transfer via croc + AgentMail identity offers (MCP)",
   "type": "module",
   "bin": {
