@@ -21,18 +21,39 @@ export function createMailClient(config: Config): AgentMailClient {
   return new AgentMailClient({ apiKey: config.agentmailApiKey });
 }
 
+/**
+ * AgentMail's HttpResponsePromise normally unwraps `{ data }` on await.
+ * Be defensive in case a caller/runtime surfaces the wrapper instead.
+ */
+export function unwrapSdkData<T extends object>(value: T | { data: T }): T {
+  if (
+    value &&
+    typeof value === "object" &&
+    "data" in value &&
+    (value as { data: unknown }).data &&
+    typeof (value as { data: unknown }).data === "object" &&
+    !("messageId" in value) &&
+    !("messages" in value)
+  ) {
+    return (value as { data: T }).data;
+  }
+  return value as T;
+}
+
 export async function sendOfferEmail(
   config: Config,
   client: AgentMailClient,
   offer: FileOffer,
 ): Promise<{ messageId: string; threadId?: string }> {
   const { subject, text } = serializeOffer(offer);
-  const result = await client.inboxes.messages.send(config.inboxId, {
-    to: offer.to,
-    subject,
-    text,
-    labels: ["agentcroc-offer"],
-  });
+  const result = unwrapSdkData(
+    await client.inboxes.messages.send(config.inboxId, {
+      to: offer.to,
+      subject,
+      text,
+      labels: ["agentcroc-offer"],
+    }),
+  );
   return {
     messageId: result.messageId,
     threadId: result.threadId,
@@ -47,7 +68,15 @@ function senderMatches(fromField: string | undefined, expected: string): boolean
   if (!fromField) return false;
   const expectedNorm = normalizeAddress(expected);
   const actual = normalizeAddress(fromField);
-  return actual === expectedNorm || actual.includes(`<${expectedNorm}>`) || actual.includes(expectedNorm);
+  return (
+    actual === expectedNorm ||
+    actual.includes(`<${expectedNorm}>`) ||
+    actual.includes(expectedNorm)
+  );
+}
+
+function subjectLooksLikeOffer(subject: string | undefined): boolean {
+  return typeof subject === "string" && subject.includes(OFFER_SUBJECT_PREFIX);
 }
 
 export async function listOffers(
@@ -61,16 +90,30 @@ export async function listOffers(
   } = {},
 ): Promise<ListedOffer[]> {
   const limit = options.limit ?? 50;
-  const list = await client.inboxes.messages.list(config.inboxId, {
-    limit,
-    subject: [OFFER_SUBJECT_PREFIX],
-    ...(options.from ? { from: [options.from] } : {}),
-  });
+
+  // Important: AgentMail serves from/to/subject filters via a search path that
+  // can hide `unauthenticated` mail. Agent-to-agent offers often land with that
+  // label, so we list with include flags and filter client-side instead.
+  const list = unwrapSdkData(
+    await client.inboxes.messages.list(config.inboxId, {
+      limit: Math.max(limit, 50),
+      includeUnauthenticated: true,
+      includeSpam: true,
+      ...(options.from ? { from: [options.from] } : {}),
+    }),
+  );
 
   const results: ListedOffer[] = [];
   for (const item of list.messages ?? []) {
-    // List returns metadata only; fetch full message for the offer JSON body.
-    const msg = await client.inboxes.messages.get(config.inboxId, item.messageId);
+    if (!subjectLooksLikeOffer(item.subject) && !(item.labels ?? []).includes("agentcroc-offer")) {
+      // Still fetch a few recent messages without our subject mark in case labels
+      // were stripped, but skip obvious non-offers when subject is present.
+      if (item.subject && !subjectLooksLikeOffer(item.subject)) continue;
+    }
+
+    const msg = unwrapSdkData(
+      await client.inboxes.messages.get(config.inboxId, item.messageId),
+    );
     const body = msg.extractedText ?? msg.text ?? "";
     const offer = parseOfferFromText(body);
     if (!offer) continue;
@@ -93,6 +136,8 @@ export async function listOffers(
       labels,
       alreadyReceived,
     });
+
+    if (results.length >= limit) break;
   }
   return results;
 }
