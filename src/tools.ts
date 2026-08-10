@@ -16,6 +16,7 @@ import {
   fileSizeBytes,
   generateLiveCode,
   generateTransferId,
+  waitForLiveSenderReady,
 } from "./croc.js";
 import type { FileOffer } from "./offer.js";
 import { OFFER_PROTOCOL } from "./offer.js";
@@ -74,7 +75,7 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
           .enum(["store", "live"])
           .optional()
           .describe(
-            'Transfer mode. "store" (default) is async via getcroc.com encrypted storage. "live" requires the recipient to connect while the sender waits on the public croc relay.',
+            'Transfer mode. "store" (default) is async via getcroc.com encrypted storage. "live" starts waiting on the public croc relay and returns immediately; the recipient must call receive_file while the sender is still waiting.',
           ),
       },
     },
@@ -118,7 +119,8 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
           });
         }
 
-        // live mode: publish offer first, then wait on relay for receiver
+        // live mode: start waiting on the relay, email the offer, return immediately.
+        // (Awaiting completion here makes Cursor/opencode MCP calls time out.)
         const code = generateLiveCode();
         const offer: FileOffer = {
           protocol: OFFER_PROTOCOL,
@@ -133,22 +135,21 @@ export function registerTools(server: McpServer, config: Config = loadConfig()):
           created_at: new Date().toISOString(),
           expires_at: defaultExpiry("live"),
         };
-        const mailResult = await sendOfferEmail(config, mail, offer);
         const live = crocLiveSend(config, resolved, code);
-        try {
-          await live.done;
-        } catch (err) {
-          live.kill();
-          throw err;
-        }
+        await waitForLiveSenderReady();
+        const mailResult = await sendOfferEmail(config, mail, offer);
+        // Intentionally do not await live.done — receiver should call receive_file next.
+        void live;
         return textResult({
-          status: "transfer_complete",
+          status: "waiting_for_receiver",
           mode: "live",
           transfer_id: transferId,
           to,
           filename,
           size_bytes: size,
+          expires_at: offer.expires_at,
           offer_message_id: mailResult.messageId,
+          note: "Sender is waiting on the croc relay. On the recipient agent, call receive_file soon (before live expiry).",
         });
       } catch (err) {
         return textResult(
