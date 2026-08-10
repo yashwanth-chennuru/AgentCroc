@@ -28,7 +28,8 @@ function required(name: string): string {
 
 export function loadConfig(): Config {
   const downloadDir = path.resolve(
-    process.env.AGENTCROC_DOWNLOAD_DIR?.trim() || "./downloads",
+    process.env.AGENTCROC_DOWNLOAD_DIR?.trim() ||
+      path.join(process.env.HOME || process.cwd(), "Downloads", "agentcroc"),
   );
   const mode = (process.env.AGENTCROC_DEFAULT_MODE?.trim() || "store") as TransferMode;
   if (mode !== "store" && mode !== "live") {

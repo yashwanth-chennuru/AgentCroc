@@ -1,128 +1,88 @@
 # AgentCroc
 
-Agent-to-agent file transfer: **croc** moves encrypted bytes, **AgentMail** is identity + a tiny offer (pickup slip), **MCP** is the agent-native interface.
+Send files between agents by AgentMail identity. Encrypted with [croc](https://github.com/schollz/croc). Exposed as an MCP server.
 
-Files are **not** sent as email attachments.
+## Quick setup (like a normal MCP)
 
-## Final architecture (Method 2 — tiny offers)
-
-```text
-Agent A (MCP + .env)                         Agent B (MCP + .env)
-────────────────────                         ────────────────────
-1. encrypt+upload via croc                   4. receive_file / list_offers
-   (default: --store on getcroc.com)         5. read offer from AgentMail inbox
-2. email tiny offer → B@agentmail.to         6. redeem store token / live code via croc
-3. done (async)                              7. write file to disk
-```
-
-### Do you need your own server?
-
-**No for MVP.**
-
-| Piece | Who hosts it |
-|---|---|
-| AgentMail inbox + offer emails | AgentMail SaaS |
-| Encrypted file store / relay | Public **getcroc.com** store + public croc relay |
-| MCP server | Runs locally on each agent host |
-| Secrets (`AGENTMAIL_API_KEY`, inbox id) | Owner infra (`.env`) |
-
-Optional later: self-host `croc relay` / store if you want private infra.
-
-### Modes
-
-- **`store` (default)** — async. A uploads ciphertext to getcroc.com; B can receive later using the offer token.
-- **`live`** — both sides online. A waits on the public relay after sending the offer; B joins with the offer code.
-
-### MCP tools
-
-| Tool | Purpose |
-|---|---|
-| `whoami` | Show this agent's inbox / defaults |
-| `send_file` | Send file to `agentB@agentmail.to` |
-| `list_offers` | List pending pickup slips in inbox |
-| `receive_file` | Fetch+decrypt from an offer |
-
-Example agent prompts:
-
-- `send hiringdata.pdf to agentB@agentmail.to`
-- `list pending file offers`
-- `receive any files from agentA@agentmail.to`
-
-## Setup
-
-### 1. Prerequisites
-
-- Node.js 20+
-- [croc](https://github.com/schollz/croc) on PATH (`curl https://getcroc.com | bash`)
-- An [AgentMail](https://docs.agentmail.to/welcome) API key and inbox for each agent
-
-### 2. Install
+**1. One-time: install croc**
 
 ```bash
-npm install
-npm run build
+curl https://getcroc.com | bash
 ```
 
-### 3. Configure each agent host
+**2. Get AgentMail credentials**
 
-```bash
-cp .env.example .env
-```
+From [console.agentmail.to](https://console.agentmail.to): API key + inbox (e.g. `you@agentmail.to`).
 
-```bash
-AGENTMAIL_API_KEY=am_...
-AGENTCROC_INBOX_ID=agentA@agentmail.to
-AGENTCROC_DOWNLOAD_DIR=./downloads
-# AGENTCROC_DEFAULT_MODE=store
-```
-
-Agent B gets its own `.env` with `agentB@agentmail.to`.
-
-### 4. Connect MCP (Cursor example)
+**3. Paste into Cursor MCP settings**
 
 ```json
 {
   "mcpServers": {
     "agentcroc": {
-      "command": "node",
-      "args": ["/absolute/path/to/AgentCroc/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "github:yashwanth-chennuru/AgentCroc"],
       "env": {
         "AGENTMAIL_API_KEY": "am_...",
-        "AGENTCROC_INBOX_ID": "agentA@agentmail.to",
-        "AGENTCROC_DOWNLOAD_DIR": "/absolute/path/to/downloads"
+        "AGENTCROC_INBOX_ID": "you@agentmail.to"
       }
     }
   }
 }
 ```
 
-Or point `command` at `npx tsx` + `src/index.ts` during development.
+That’s it. Restart MCP / Cursor, then try:
 
-## Offer format
+- `send ./notes.pdf to friend@agentmail.to`
+- `receive files from friend@agentmail.to`
 
-Offers are plain AgentMail messages with subject prefix `[AgentCroc]` and a JSON block:
+Downloads default to `~/Downloads/agentcroc` (override with `AGENTCROC_DOWNLOAD_DIR` if you want).
 
-```text
-AGENTCROC_OFFER_BEGIN
-{ "protocol": "agentcroc-offer/v1", "transfer_id": "tr_...", ... }
-AGENTCROC_OFFER_END
-```
+Each agent that sends/receives needs its own MCP entry with **its** API key + inbox.
 
-That JSON includes the croc store token (or live code). **AgentMail can read the offer** (signaling is not encrypted to the mail provider). File ciphertext remains E2E via croc.
+---
 
-## Security notes
+## What it does
 
-- Treat offer emails as capability-bearing: anyone who can read B’s inbox can redeem a pending transfer.
-- Prefer `store` for async agent workflows.
-- Use a private relay/store for sensitive production traffic.
-- Method 1 (paired secrets, no offer email) can be added later without changing the MCP tool names.
+| Tool | Purpose |
+|---|---|
+| `send_file` | Upload via croc → email a tiny offer to the other agent |
+| `list_offers` | See pending offers in your inbox |
+| `receive_file` | Fetch + decrypt the file |
+| `whoami` | Show your configured identity |
 
-## Development
+Files are **not** email attachments. AgentMail only carries a small pickup slip; croc moves the encrypted bytes (public getcroc.com store by default — no server of yours required).
+
+## Local clone (optional)
 
 ```bash
-npm run typecheck
-npm run dev
+git clone https://github.com/yashwanth-chennuru/AgentCroc.git
+cd AgentCroc && npm install
 ```
+
+```json
+{
+  "mcpServers": {
+    "agentcroc": {
+      "command": "node",
+      "args": ["/absolute/path/to/AgentCroc/bin/agentcroc.js"],
+      "env": {
+        "AGENTMAIL_API_KEY": "am_...",
+        "AGENTCROC_INBOX_ID": "you@agentmail.to"
+      }
+    }
+  }
+}
+```
+
+## Modes
+
+- **`store` (default)** — async; recipient can download later
+- **`live`** — both agents online at once on the public relay
+
+## Security (short)
+
+Offer emails contain redeem tokens. Anyone who can read that inbox can claim a pending transfer. File contents stay E2E via croc.
 
 ## License
 

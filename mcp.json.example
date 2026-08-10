@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "agentcroc": {
+      "command": "npx",
+      "args": ["-y", "github:yashwanth-chennuru/AgentCroc"],
+      "env": {
+        "AGENTMAIL_API_KEY": "am_...",
+        "AGENTCROC_INBOX_ID": "you@agentmail.to"
+      }
+    }
+  }
+}
