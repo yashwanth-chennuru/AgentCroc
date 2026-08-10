@@ -1,4 +1,5 @@
 import { strict as assert } from "node:assert";
+import { parseCrocExpiry } from "../src/croc.js";
 import {
   OFFER_PROTOCOL,
   parseOfferFromText,
@@ -27,4 +28,11 @@ assert.equal(parsed!.transfer_id, "tr_test");
 assert.equal(parsed!.store_token, offer.store_token);
 assert.equal(parseOfferFromText("no offer here"), null);
 
+assert.equal(parseCrocExpiry(undefined), undefined);
+assert.equal(parseCrocExpiry("not a date"), undefined);
+const parsedExpiry = parseCrocExpiry("Tue, 11 Aug 2026 17:50:45 UTC");
+assert.ok(parsedExpiry);
+assert.equal(parsedExpiry, new Date("Tue, 11 Aug 2026 17:50:45 UTC").toISOString());
+
 console.log("offer round-trip ok");
+console.log("croc expiry parse ok");
