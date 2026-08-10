@@ -2,9 +2,11 @@ import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { unwrapSdkData } from "../src/agentmail.js";
+import { unwrapSdkData, offerBodyFromMessage } from "../src/agentmail.js";
 import { parseCrocExpiry } from "../src/croc.js";
 import {
+  OFFER_BEGIN,
+  OFFER_END,
   OFFER_PROTOCOL,
   openOfferSecrets,
   parseOfferFromText,
@@ -21,6 +23,33 @@ assert.deepEqual(
   unwrapSdkData({ messageId: "m1", data: "noise" } as { messageId: string; data: string }),
   { messageId: "m1", data: "noise" },
 );
+
+// Prefer full text over extractedText preview (AgentMail shape that broke list_offers).
+const previewOnly = "AgentCroc file transfer offer";
+const fullBody = [
+  previewOnly,
+  "",
+  OFFER_BEGIN,
+  JSON.stringify({
+    protocol: OFFER_PROTOCOL,
+    transfer_id: "tr_preview_bug",
+    from: "a@agentmail.to",
+    to: "b@agentmail.to",
+    filename: "hi.txt",
+    size_bytes: 1,
+    mode: "store",
+    store_token: "croc-store-v1.x",
+    created_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 3600_000).toISOString(),
+  }),
+  OFFER_END,
+].join("\n");
+assert.equal(
+  offerBodyFromMessage({ extractedText: previewOnly, text: fullBody }),
+  fullBody.trim(),
+);
+assert.ok(parseOfferFromText(offerBodyFromMessage({ extractedText: previewOnly, text: fullBody })));
+assert.equal(parseOfferFromText(offerBodyFromMessage({ extractedText: previewOnly, text: "" })), null);
 
 const offer: FileOffer = {
   protocol: OFFER_PROTOCOL,
@@ -76,3 +105,4 @@ console.log("offer round-trip ok");
 console.log("croc expiry parse ok");
 console.log("sdk unwrap ok");
 console.log("seal/pair ok");
+console.log("offer body prefers text ok");

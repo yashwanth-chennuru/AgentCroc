@@ -79,6 +79,26 @@ function subjectLooksLikeOffer(subject: string | undefined): boolean {
   return typeof subject === "string" && subject.includes(OFFER_SUBJECT_PREFIX);
 }
 
+/**
+ * Prefer the full AgentMail `text` body. `extractedText` is often just a short
+ * preview (e.g. "AgentCroc file transfer offer") and does not contain the
+ * AGENTCROC_OFFER_BEGIN/END block.
+ */
+export function offerBodyFromMessage(msg: {
+  text?: string | null;
+  extractedText?: string | null;
+}): string {
+  const full = typeof msg.text === "string" ? msg.text.trim() : "";
+  if (full) return full;
+  const extracted = typeof msg.extractedText === "string" ? msg.extractedText.trim() : "";
+  return extracted;
+}
+
+export interface ListOffersResult {
+  offers: ListedOffer[];
+  skipped: Array<{ messageId: string; subject?: string; reason: string }>;
+}
+
 export async function listOffers(
   config: Config,
   client: AgentMailClient,
@@ -89,6 +109,20 @@ export async function listOffers(
     limit?: number;
   } = {},
 ): Promise<ListedOffer[]> {
+  const { offers } = await listOffersDetailed(config, client, options);
+  return offers;
+}
+
+export async function listOffersDetailed(
+  config: Config,
+  client: AgentMailClient,
+  options: {
+    from?: string;
+    includeReceived?: boolean;
+    includeExpired?: boolean;
+    limit?: number;
+  } = {},
+): Promise<ListOffersResult> {
   const limit = options.limit ?? 50;
 
   // Important: AgentMail serves from/to/subject filters via a search path that
@@ -104,6 +138,8 @@ export async function listOffers(
   );
 
   const results: ListedOffer[] = [];
+  const skipped: ListOffersResult["skipped"] = [];
+
   for (const item of list.messages ?? []) {
     if (!subjectLooksLikeOffer(item.subject) && !(item.labels ?? []).includes("agentcroc-offer")) {
       // Still fetch a few recent messages without our subject mark in case labels
@@ -114,9 +150,19 @@ export async function listOffers(
     const msg = unwrapSdkData(
       await client.inboxes.messages.get(config.inboxId, item.messageId),
     );
-    const body = msg.extractedText ?? msg.text ?? "";
+    const body = offerBodyFromMessage(msg);
     const offer = parseOfferFromText(body);
-    if (!offer) continue;
+    if (!offer) {
+      if (subjectLooksLikeOffer(msg.subject ?? item.subject)) {
+        skipped.push({
+          messageId: msg.messageId,
+          subject: msg.subject ?? item.subject,
+          reason:
+            "Subject looks like an AgentCroc offer but body has no parseable AGENTCROC_OFFER block (check text vs extractedText).",
+        });
+      }
+      continue;
+    }
     if (
       options.from &&
       !senderMatches(offer.from, options.from) &&
@@ -126,8 +172,22 @@ export async function listOffers(
     }
     const labels = msg.labels ?? [];
     const alreadyReceived = labels.includes(RECEIVED_LABEL);
-    if (alreadyReceived && !options.includeReceived) continue;
-    if (offerIsExpired(offer) && !options.includeExpired) continue;
+    if (alreadyReceived && !options.includeReceived) {
+      skipped.push({
+        messageId: msg.messageId,
+        subject: msg.subject,
+        reason: "already marked agentcroc-received",
+      });
+      continue;
+    }
+    if (offerIsExpired(offer) && !options.includeExpired) {
+      skipped.push({
+        messageId: msg.messageId,
+        subject: msg.subject,
+        reason: `expired at ${offer.expires_at}`,
+      });
+      continue;
+    }
 
     results.push({
       offer,
@@ -139,7 +199,7 @@ export async function listOffers(
 
     if (results.length >= limit) break;
   }
-  return results;
+  return { offers: results, skipped };
 }
 
 export async function markOfferReceived(
