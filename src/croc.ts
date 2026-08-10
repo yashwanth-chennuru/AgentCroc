@@ -159,6 +159,8 @@ export function crocLiveSend(
     child = spawn(config.crocBin, args, {
       env: { ...process.env },
       stdio: ["ignore", "pipe", "pipe"],
+      // Keep waiting on the relay even after send_file returns to the MCP client.
+      detached: false,
     });
 
     let output = "";
@@ -174,6 +176,10 @@ export function crocLiveSend(
       reject(new Error(`Live send timed out after ${config.liveTimeoutMs}ms`));
     }, config.liveTimeoutMs);
 
+    // Don't keep the Node event loop alive solely for this timer/child logging
+    // after the MCP tool returns — the child process itself still runs.
+    timer.unref?.();
+
     child.on("error", (err) => {
       clearTimeout(timer);
       reject(err);
@@ -186,12 +192,20 @@ export function crocLiveSend(
     });
   });
 
+  // Avoid unhandled rejection if nobody awaits done (send_file returns early).
+  done.catch(() => undefined);
+
   return {
     mode: "live",
     code,
     done,
     kill: () => child?.kill("SIGTERM"),
   };
+}
+
+/** Brief pause so the live sender can register on the relay before we return. */
+export function waitForLiveSenderReady(ms = 1500): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function crocReceiveStore(

@@ -47,7 +47,7 @@ export function loadConfig(): Config {
     crocPass: process.env.CROC_PASS?.trim() || undefined,
     crocStoreUrl: process.env.CROC_STORE_URL?.trim() || "https://getcroc.com",
     defaultMode: mode,
-    liveTimeoutMs: Number(process.env.AGENTCROC_LIVE_TIMEOUT_MS || 15 * 60 * 1000),
+    liveTimeoutMs: Number(process.env.AGENTCROC_LIVE_TIMEOUT_MS || 30 * 60 * 1000),
   };
 }
 
