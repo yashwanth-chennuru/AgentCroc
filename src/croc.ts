@@ -126,16 +126,25 @@ export async function crocStoreSend(
 
   const browserLink = rawOutput.match(/https:\/\/\S+\/s\/\S+/)?.[0];
   const revokeId = rawOutput.match(/croc --revoke\s+(\S+)/)?.[1];
-  const expiresAt = rawOutput.match(/available until\s+(.+?)\s+or one verified/i)?.[1];
+  const expiresRaw = rawOutput.match(/available until\s+(.+?)\s+or one verified/i)?.[1];
 
   return {
     mode: "store",
     storeToken,
     browserLink,
     revokeId,
-    expiresAt: expiresAt ? new Date(expiresAt).toISOString() : undefined,
+    expiresAt: parseCrocExpiry(expiresRaw),
     rawOutput,
   };
+}
+
+/** Parse croc's human expiry text without throwing on odd locales/formats. */
+export function parseCrocExpiry(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const cleaned = raw.replace(/\u0000/g, "").replace(/\s+/g, " ").trim();
+  const ms = Date.parse(cleaned);
+  if (!Number.isFinite(ms)) return undefined;
+  return new Date(ms).toISOString();
 }
 
 export function crocLiveSend(
